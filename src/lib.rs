@@ -50,14 +50,12 @@ decl_module! {
 		// Errors must be initialized if they are used by the pallet.
 		type Error = Error<T>;
 
-        // base one is 
-        // #[weight = 100_000 + 20_000]
         #[weight = FunctionOf(
  			// weight, function.
             |args: (&Vec<u8>, &Vec<u8>, &bool,)| {
-                let mut base = 40_000_000_000; // base 40 ms in WASM
+                let mut base = 40_000_000_000; // base 40 ms in WASM, otherwise 8 ms can be used
                 if *(args.2) {
-                    base += 50_000_000_000; // estra 5ms in WASM
+                    base += 2_000_000_000; // estra 2ms in WASM, otherwise 0.4 ms can be used
                 }
 
                 base
