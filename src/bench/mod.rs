@@ -6,6 +6,7 @@ use std::time::*;
 const LIMIT: u128 = 1_000;
 
 #[test]
+#[ignore]
 fn custom_benchmark_routine_for_reference_circuit_with_lookups() {
     new_test_ext().execute_with(|| {
         // Dispatch a signed extrinsic.
