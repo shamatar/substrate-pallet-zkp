@@ -2,7 +2,9 @@
 
 use franklin_crypto::bellman;
 use franklin_crypto::bellman::pairing;
+use franklin_crypto::bellman::pairing::ff;
 
+use crate::ff::{Field, PrimeField, PrimeFieldRepr, ScalarEngine};
 use crate::pairing::Engine;
 use crate::bellman::plonk::better_better_cs::cs::Circuit;
 use crate::bellman::plonk::better_better_cs::proof::Proof;
@@ -52,9 +54,9 @@ decl_module! {
 
         #[weight = FunctionOf(
  			// weight, function.
-            |args: (&Vec<u8>, &Vec<u8>, &bool,)| {
+            |args: (&Vec<u8>, &Vec<u8>, &Vec<u8>, &bool,)| {
                 let mut base = 40_000_000_000; // base 40 ms in WASM, otherwise 8 ms can be used
-                if *(args.2) {
+                if *(args.3) {
                     base += 2_000_000_000; // estra 2ms in WASM, otherwise 0.4 ms can be used
                 }
 
@@ -63,12 +65,21 @@ decl_module! {
  			// class, fixed.
  			DispatchClass::Operational,
  			// pays fee, function.
- 			|_args: (&Vec<u8>, &Vec<u8>, &bool,)| Pays::Yes,
+ 			|_args: (&Vec<u8>, &Vec<u8>, &Vec<u8>, &bool,)| Pays::Yes,
  		)]
-		pub fn verify(origin, key: Vec<u8>, proof: Vec<u8>, uses_lookups_bool: bool) -> dispatch::DispatchResult {
+		pub fn verify(origin, inputs_encoding: Vec<u8>, key: Vec<u8>, proof: Vec<u8>, uses_lookups_bool: bool) -> dispatch::DispatchResult {
             let uses_lookups = CircuitUsesLookups::from(uses_lookups_bool);
             let vk = Self::parse_vk(&key, uses_lookups).map_err(|_| Error::<T>::MalformedVerificationKey)?;
             let proof = Self::parse_proof(&proof, uses_lookups).map_err(|_| Error::<T>::MalformedProof)?;
+            let inputs = Self::parse_inputs(&inputs_encoding).map_err(|_| Error::<T>::MalformedProof)?;
+            if inputs.len() != proof.inputs.len() {
+                return Err(Error::<T>::MalformedProof)?;
+            }
+            for (inp, proof_data) in inputs.iter().zip(proof.inputs.iter()) {
+                if inp != proof_data {
+                    return Err(Error::<T>::MalformedProof)?;
+                }
+            }
 		    let valid = Self::verify_proof(&vk, &proof).map_err(|_| Error::<T>::ProofIsInvalid)?;
 		    if valid { Ok(()) } else { Err(Error::<T>::ProofIsInvalid)? }
         }
@@ -76,6 +87,35 @@ decl_module! {
 }
 
 impl<T: Bn256PlonkVerifier> Module<T> {
+    const MAX_NUM_INPUTS: usize = 32;
+    const FIELD_ELEMENT_ENCODING_SIZE: usize = 32;
+
+    pub fn parse_inputs(encoding: &[u8]) -> Result<Vec< <Bn256 as ScalarEngine>::Fr>, ()> {
+        if encoding.len() % Self::FIELD_ELEMENT_ENCODING_SIZE != 0 {
+            return Err(());
+        }
+        let num_inputs = encoding.len() / Self::FIELD_ELEMENT_ENCODING_SIZE;
+        if num_inputs > Self::MAX_NUM_INPUTS {
+            return Err(());
+        }
+        let mut inputs = Vec::with_capacity(num_inputs);
+        let mut rest = encoding;
+        for _ in 0..num_inputs {
+            let (this, other) = rest.split_at(Self::FIELD_ELEMENT_ENCODING_SIZE);
+            rest = other;
+            let fe = Self::parse_field_element(this)?;
+            inputs.push(fe);
+        }
+
+        Ok(inputs)
+    }
+    fn parse_field_element(encoding: &[u8]) -> Result< <Bn256 as ScalarEngine>::Fr, ()> {
+        assert_eq!(encoding.len(), Self::FIELD_ELEMENT_ENCODING_SIZE);
+        let mut repr = <Bn256 as ScalarEngine>::Fr::zero().into_repr();
+        repr.read_be(encoding).map_err(|_| ())?;
+
+        <Bn256 as ScalarEngine>::Fr::from_repr(repr).map_err(|_| ())
+    }
     pub fn parse_vk(key: &[u8], lookups_marker: CircuitUsesLookups) -> Result<VerificationKey<Bn256, T::Circuit>, ()> {
         let vk: VerificationKey<Bn256, T::Circuit> = VerificationKey::read(key).map_err(|_| ())?;
         let wellformed = validate_vk(&vk, lookups_marker);
